@@ -19,6 +19,7 @@ import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.handlers.HandlerUtil;
+import org.jboss.mapper.MappingOperation;
 import org.jboss.mapper.dozer.config.Field;
 import org.jboss.mapper.eclipse.DataMapper;
 import org.jboss.mapper.eclipse.DataMapperEditor;
@@ -47,7 +48,7 @@ public class DeleteMappingHandler extends AbstractHandler {
                     DataMapperEditorMappingPage mapPage =
                             (DataMapperEditorMappingPage) dmEditor.getSelectedPage();
                     DataMapper mapper = mapPage.mapper();
-                    mapper.deleteFieldMapping((Field) element);
+                    mapper.deleteFieldMapping((MappingOperation<?,?>) element);
                 }
             }
         }

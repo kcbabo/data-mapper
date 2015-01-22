@@ -73,10 +73,13 @@ import org.eclipse.swt.widgets.ToolItem;
 import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.dialogs.ResourceListSelectionDialog;
+import org.jboss.mapper.FieldMapping;
 import org.jboss.mapper.Literal;
-import org.jboss.mapper.dozer.ConfigBuilder;
-import org.jboss.mapper.dozer.config.Field;
-import org.jboss.mapper.dozer.config.Mapping;
+import org.jboss.mapper.LiteralMapping;
+import org.jboss.mapper.MapperConfiguration;
+import org.jboss.mapper.MappingOperation;
+import org.jboss.mapper.MappingType;
+import org.jboss.mapper.dozer.DozerMapperConfiguration;
 import org.jboss.mapper.eclipse.util.JavaUtil;
 import org.jboss.mapper.model.Model;
 import org.jboss.mapper.model.ModelBuilder;
@@ -134,7 +137,7 @@ public class DataMapper extends Composite {
     }
 
     final IFile configFile;
-    ConfigBuilder configBuilder;
+    MapperConfiguration mapperConfig;
     URLClassLoader loader;
     Model sourceModel, targetModel;
     TableViewer opViewer;
@@ -146,16 +149,13 @@ public class DataMapper extends Composite {
         this.configFile = configFile;
 
         try {
-            configBuilder = ConfigBuilder.loadConfig( new File( configFile.getLocationURI() ) );
             final IJavaProject javaProject = JavaCore.create( configFile.getProject() );
             loader = ( URLClassLoader ) JavaUtil.getProjectClassLoader( javaProject, getClass().getClassLoader() );
-
-            final List< Mapping > mappings = configBuilder.getDozerConfig().getMapping();
-            if ( !mappings.isEmpty() ) {
-                final Mapping mainMapping = mappings.get( 0 );
-                sourceModel = ModelBuilder.fromJavaClass( loader.loadClass( mainMapping.getClassA().getContent() ) );
-                targetModel = ModelBuilder.fromJavaClass( loader.loadClass( mainMapping.getClassB().getContent() ) );
-            }
+            mapperConfig = DozerMapperConfiguration.loadConfig( new File( configFile.getLocationURI() ), loader );
+            
+            final List< MappingOperation<?,?> > mappings = mapperConfig.getMappings();
+            sourceModel = mapperConfig.getSourceModel();
+            targetModel = mapperConfig.getTargetModel();
 
             setLayout( new FillLayout() );
             SashForm splitter = new SashForm( this, SWT.VERTICAL );
@@ -184,9 +184,12 @@ public class DataMapper extends Composite {
 
                 @Override
                 public String getText( final Object element ) {
-                    Field field = ( Field ) element;
-                    String literal = field.getCustomConverterParam();
-                    return literal == null ? super.getText( field.getA().getContent() ) : "\"" + literal + "\"";
+                    MappingOperation<?,?> mapping = ( MappingOperation<?,?> ) element;
+                    if ( MappingType.LITERAL == mapping.getType() ) {
+                        return ( (LiteralMapping) mapping ).getSource().getValue();
+                    } else { 
+                        return super.getText( ( (FieldMapping) mapping ).getSource().getName() );
+                    }
                 }
             } );
             final TableViewerColumn operationColumn = new TableViewerColumn( opViewer, SWT.CENTER );
@@ -204,7 +207,8 @@ public class DataMapper extends Composite {
 
                 @Override
                 public String getText( final Object element ) {
-                    return super.getText( ( ( Field ) element ).getB().getContent() );
+                    Model target = ( Model )( ( MappingOperation<?,?> ) element ).getTarget();
+                    return super.getText( target.getName() );
                 }
             } );
             opViewer.setContentProvider( new IStructuredContentProvider() {
@@ -214,14 +218,12 @@ public class DataMapper extends Composite {
 
                 @Override
                 public Object[] getElements( final Object inputElement ) {
-                    final List< Object > fields = new ArrayList<>();
-                    for ( final Mapping mapping : mappings ) {
-                        for ( final Object field : mapping.getFieldOrFieldExclude() ) {
-                            fields.add( field );
-                            opViewer.setData( field.toString(), mapping );
-                        }
+                    final List< Object > fieldMappings = new ArrayList<>();
+                    for ( final MappingOperation<?,?> mapping : mappings ) {
+                        fieldMappings.add( mapping );
+                        opViewer.setData( mapping.toString(), mapping );
                     }
-                    return fields.toArray();
+                    return fieldMappings.toArray();
                 }
 
                 @Override
@@ -242,9 +244,9 @@ public class DataMapper extends Composite {
                 @Override
                 public void widgetSelected( SelectionEvent event ) {
                     for ( final Iterator< ? > iter = ( ( IStructuredSelection ) opViewer.getSelection() ).iterator(); iter.hasNext(); ) {
-                        Field field = ( Field ) iter.next();
-                        deleteFieldMapping( field );
-                        opViewer.remove( field );
+                        MappingOperation<?,?> mapping = ( MappingOperation<?,?> ) iter.next();
+                        deleteFieldMapping( mapping );
+                        opViewer.remove( mapping );
                     }
                 }
             } );
@@ -362,12 +364,8 @@ public class DataMapper extends Composite {
                 }
             } );
             // Initialize constants from config
-            for ( final Mapping mapping : mappings ) {
-                for ( final Object object : mapping.getFieldOrFieldExclude() ) {
-                    Field field = (Field) object;
-                    String literal = field.getCustomConverterParam();
-                    if ( literal != null ) constantsViewer.add( literal );
-                }
+            for ( final Literal literal : mapperConfig.getLiterals() ) {
+                constantsViewer.add( literal );
             }
 
             final Label label = new Label( mapper, SWT.NONE );
@@ -384,10 +382,10 @@ public class DataMapper extends Composite {
                         public boolean performDrop( final Object data ) {
                             Object source =
                                 ( ( IStructuredSelection ) LocalSelectionTransfer.getTransfer().getSelection() ).getFirstElement();
-                            if (source instanceof Model) configBuilder.map( (Model) source, ( Model ) getCurrentTarget() );
-                            else configBuilder.map( new Literal( source.toString() ), ( Model ) getCurrentTarget() );
+                            if (source instanceof Model) mapperConfig.map( (Model) source, ( Model ) getCurrentTarget() );
+                            else mapperConfig.map( new Literal( source.toString() ), ( Model ) getCurrentTarget() );
                             try ( FileOutputStream stream = new FileOutputStream( new File( configFile.getLocationURI() ) ) ) {
-                                configBuilder.saveConfig( stream );
+                                mapperConfig.saveConfig( stream );
                                 configFile.getProject().refreshLocal( IResource.DEPTH_INFINITE, null );
                                 opViewer.refresh();
                             } catch ( final Exception e ) {
@@ -491,18 +489,15 @@ public class DataMapper extends Composite {
      * @param field
      * @return <code>true</code> if the supplied field was successfully removed
      */
-    public boolean deleteFieldMapping( Field field ) {
-        final Mapping mapping = ( Mapping ) opViewer.getData( field.toString() );
-        final boolean removed = mapping.getFieldOrFieldExclude().remove( field );
-        if ( removed ) {
-            try {
-                configBuilder.saveConfig( new FileOutputStream( new File( configFile.getLocationURI() ) ) );
-                configFile.getProject().refreshLocal( IResource.DEPTH_INFINITE, null );
-                opViewer.refresh();
-                return true;
-            } catch ( final Exception e ) {
-                Activator.error( getShell(), e );
-            }
+    public boolean deleteFieldMapping( MappingOperation<?,?> mapping ) {
+        mapperConfig.removeMapping(mapping);
+        try {
+            mapperConfig.saveConfig( new FileOutputStream( new File( configFile.getLocationURI() ) ) );
+            configFile.getProject().refreshLocal( IResource.DEPTH_INFINITE, null );
+            opViewer.refresh();
+            return true;
+        } catch ( final Exception e ) {
+            Activator.error( getShell(), e );
         }
         return false;
     }
@@ -535,10 +530,10 @@ public class DataMapper extends Composite {
 
     void updateMappings() {
         if ( sourceModel == null || targetModel == null ) return;
-        configBuilder.clearMappings();
-        configBuilder.addClassMapping( sourceModel.getType(), targetModel.getType() );
+        mapperConfig.removeAllMappings();
+        mapperConfig.addClassMapping( sourceModel.getType(), targetModel.getType() );
         try {
-            configBuilder.saveConfig( new FileOutputStream( new File( configFile.getLocationURI() ) ) );
+            mapperConfig.saveConfig( new FileOutputStream( new File( configFile.getLocationURI() ) ) );
             configFile.getProject().refreshLocal( IResource.DEPTH_INFINITE, null );
             opViewer.refresh();
         } catch ( final Exception e ) {
