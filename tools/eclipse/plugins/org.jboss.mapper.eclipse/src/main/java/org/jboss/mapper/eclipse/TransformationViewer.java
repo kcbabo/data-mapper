@@ -48,7 +48,7 @@ import org.jboss.mapper.MappingOperation;
 import org.jboss.mapper.MappingType;
 import org.jboss.mapper.camel.CamelConfigBuilder;
 import org.jboss.mapper.camel.EndpointHelper;
-import org.jboss.mapper.camel.config.CamelEndpointFactoryBean;
+import org.jboss.mapper.camel.CamelEndpoint;
 import org.jboss.mapper.model.Model;
 
 class TransformationViewer extends Composite {
@@ -228,7 +228,7 @@ class TransformationViewer extends Composite {
                     IProject project = file.getProject();
                     File camelFile = new File(project.getFile(CAMEL_CONFIG_PATH).getLocationURI());
                     CamelConfigBuilder builder = CamelConfigBuilder.loadConfig(camelFile);
-                    CamelEndpointFactoryBean theEndpoint = builder.getEndpoint(endpointID);
+                    CamelEndpoint theEndpoint = builder.getEndpoint(endpointID);
 
                     if (theEndpoint != null) {
                         System.out.println("Found endpoint: " + endpointID);
